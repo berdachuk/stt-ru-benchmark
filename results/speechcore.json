@@ -1,0 +1,9 @@
+{
+  "wer": 3.74,
+  "cer": 1.02,
+  "ok": 150,
+  "failed": 0,
+  "latency_median_s": 3.79,
+  "latency_p90_s": 4.07,
+  "rtf_end_to_end": 0.348
+}

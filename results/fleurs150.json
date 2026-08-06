@@ -1,0 +1,25 @@
+{
+  "dataset": "google/fleurs ru_ru test",
+  "samples": 150,
+  "audio_minutes": 28.4,
+  "models": {
+    "whisper-1": {
+      "wer": 3.74,
+      "cer": 1.02,
+      "ok": 150,
+      "failed": 0,
+      "latency_median_s": 1.18,
+      "latency_p90_s": 1.38,
+      "rtf": 0.11
+    },
+    "whisper-podlodka-turbo": {
+      "wer": 8.65,
+      "cer": 1.8,
+      "ok": 150,
+      "failed": 0,
+      "latency_median_s": 1.43,
+      "latency_p90_s": 1.71,
+      "rtf": 0.133
+    }
+  }
+}
