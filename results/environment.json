@@ -1,0 +1,47 @@
+{
+  "python": "3.14.2",
+  "packages": {
+    "datasets": "5.0.1",
+    "jiwer": "4.0.0",
+    "number-parser": "0.3.2",
+    "requests": "2.34.2",
+    "soundfile": "0.14.0"
+  },
+  "dataset": {
+    "id": "google/fleurs",
+    "config": "ru_ru",
+    "split": "test",
+    "utterances": 775
+  },
+  "analysis": {
+    "bootstrap_runs": 50000,
+    "seed": 0,
+    "percentile": "линейная интерполяция"
+  },
+  "api_params": {
+    "openai_compatible": {
+      "language": "ru",
+      "response_format": "json"
+    },
+    "deepgram": {
+      "language": "ru",
+      "punctuate": true,
+      "smart_format": false
+    },
+    "gigaam": {
+      "model": "gigaam-v3"
+    },
+    "speechcore": {
+      "model": "large-v3",
+      "language": "ru",
+      "diarize": false,
+      "примечание": "на бэкенде фактически загружен large-v3-turbo"
+    }
+  },
+  "audio": {
+    "медиана_с": 11.1,
+    "p90_с": 16.8,
+    "макс_с": 33.8,
+    "длиннее_30с": 1
+  }
+}

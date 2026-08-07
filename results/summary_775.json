@@ -14,8 +14,8 @@
   "whisper-1": {
     "wer": 4.44,
     "ci95": [
-      3.98,
-      4.99
+      3.95,
+      4.96
     ],
     "cer": 1.35,
     "wer_numbers": 4.31,
@@ -26,8 +26,8 @@
   "speechcore": {
     "wer": 4.45,
     "ci95": [
-      3.98,
-      5.01
+      3.96,
+      4.97
     ],
     "cer": 1.36,
     "wer_numbers": 4.33,
@@ -38,8 +38,8 @@
   "gigaam-v3": {
     "wer": 4.5,
     "ci95": [
-      3.97,
-      5.03
+      4.02,
+      5.01
     ],
     "cer": 1.41,
     "wer_numbers": 4.32,
@@ -50,8 +50,8 @@
   "nova-3": {
     "wer": 6.55,
     "ci95": [
-      5.87,
-      7.34
+      5.84,
+      7.29
     ],
     "cer": 4.14,
     "wer_numbers": 4.95,
@@ -62,7 +62,7 @@
   "whisper-podlodka-turbo": {
     "wer": 8.8,
     "ci95": [
-      8.13,
+      8.15,
       9.46
     ],
     "cer": 1.98,
@@ -75,8 +75,8 @@
     "gigaam-v3 − nova-2": {
       "delta_pp": 0.53,
       "ci95": [
-        0.18,
-        0.88
+        0.16,
+        0.91
       ],
       "significant": true,
       "n": 775
@@ -84,8 +84,8 @@
     "gigaam-v3 − nova-3": {
       "delta_pp": -2.05,
       "ci95": [
-        -2.61,
-        -1.5
+        -2.63,
+        -1.49
       ],
       "significant": true,
       "n": 775
@@ -93,8 +93,8 @@
     "gigaam-v3 − speechcore": {
       "delta_pp": 0.05,
       "ci95": [
-        -0.37,
-        0.48
+        -0.4,
+        0.47
       ],
       "significant": false,
       "n": 775
@@ -102,8 +102,8 @@
     "gigaam-v3 − whisper-1": {
       "delta_pp": 0.07,
       "ci95": [
-        -0.36,
-        0.5
+        -0.38,
+        0.49
       ],
       "significant": false,
       "n": 775
@@ -111,8 +111,8 @@
     "gigaam-v3 − whisper-podlodka-turbo": {
       "delta_pp": -4.29,
       "ci95": [
-        -4.83,
-        -3.75
+        -4.84,
+        -3.74
       ],
       "significant": true,
       "n": 775
@@ -120,8 +120,8 @@
     "nova-2 − nova-3": {
       "delta_pp": -2.58,
       "ci95": [
-        -3.17,
-        -2.02
+        -3.21,
+        -1.98
       ],
       "significant": true,
       "n": 775
@@ -139,7 +139,7 @@
       "delta_pp": -0.46,
       "ci95": [
         -0.92,
-        -0.04
+        -0.03
       ],
       "significant": true,
       "n": 775
@@ -147,8 +147,8 @@
     "nova-2 − whisper-podlodka-turbo": {
       "delta_pp": -4.82,
       "ci95": [
-        -5.44,
-        -4.26
+        -5.41,
+        -4.23
       ],
       "significant": true,
       "n": 775
@@ -157,7 +157,7 @@
       "delta_pp": 2.1,
       "ci95": [
         1.44,
-        2.8
+        2.77
       ],
       "significant": true,
       "n": 775
@@ -165,8 +165,8 @@
     "nova-3 − whisper-1": {
       "delta_pp": 2.11,
       "ci95": [
-        1.44,
-        2.82
+        1.46,
+        2.78
       ],
       "significant": true,
       "n": 775
@@ -174,7 +174,7 @@
     "nova-3 − whisper-podlodka-turbo": {
       "delta_pp": -2.25,
       "ci95": [
-        -3.06,
+        -2.99,
         -1.48
       ],
       "significant": true,
@@ -193,7 +193,7 @@
       "delta_pp": -4.34,
       "ci95": [
         -4.89,
-        -3.79
+        -3.8
       ],
       "significant": true,
       "n": 775

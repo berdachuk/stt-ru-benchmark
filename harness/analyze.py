@@ -76,16 +76,49 @@ def corpus_cer(rows: list[dict], numbers: bool) -> float:
     return jiwer.cer(refs, hyps) * 100
 
 
+def per_row_counts(rows: list[dict], numbers: bool) -> list[tuple[int, int]]:
+    """(ошибок, длина эталона) на высказывание.
+
+    Корпусный WER = сумма ошибок / сумма длин, поэтому бутстрап можно гонять по
+    этим парам, а не пересчитывать выравнивание на каждой реплике. Результат
+    математически тот же, но 50 000 реплик считаются за секунды, а не за часы —
+    это важно, когда интервал проходит близко к нулю и грубость перцентиля
+    начинает влиять на вывод.
+    """
+    out = []
+    for r in rows:
+        ref, hyp = normalize(r["ref_raw"], numbers), normalize(r["hyp_raw"], numbers)
+        m = jiwer.process_words([ref], [hyp])
+        out.append((m.substitutions + m.deletions + m.insertions,
+                    m.substitutions + m.deletions + m.hits))
+    return out
+
+
+def _percentile(values: list[float], q: float) -> float:
+    """Перцентиль с линейной интерполяцией (как numpy), а не грубым индексом."""
+    if not values:
+        return float("nan")
+    pos = q * (len(values) - 1)
+    lo = int(pos)
+    hi = min(lo + 1, len(values) - 1)
+    return values[lo] + (values[hi] - values[lo]) * (pos - lo)
+
+
 def bootstrap_ci(rows: list[dict], numbers: bool, runs: int = 1000, seed: int = 0):
     """95%-й интервал WER бутстрапом по высказываниям."""
+    counts = per_row_counts(rows, numbers)
     rnd = random.Random(seed)
-    n = len(rows)
+    n = len(counts)
     vals = []
     for _ in range(runs):
-        sample = [rows[rnd.randrange(n)] for _ in range(n)]
-        vals.append(corpus_wer(sample, numbers))
+        e = l = 0
+        for _ in range(n):
+            de, dl = counts[rnd.randrange(n)]
+            e += de
+            l += dl
+        vals.append(e / l * 100 if l else 0.0)
     vals.sort()
-    return vals[int(runs * 0.025)], vals[int(runs * 0.975)]
+    return _percentile(vals, 0.025), _percentile(vals, 0.975)
 
 
 def paired_delta_ci(a: list[dict], b: list[dict], numbers: bool,
@@ -95,16 +128,22 @@ def paired_delta_ci(a: list[dict], b: list[dict], numbers: bool,
     pairs = [(r, by_idx_b[r["idx"]]) for r in a if r["idx"] in by_idx_b]
     if not pairs:
         return None
-    point = corpus_wer([p[0] for p in pairs], numbers) - corpus_wer([p[1] for p in pairs], numbers)
+    ca = per_row_counts([p[0] for p in pairs], numbers)
+    cb = per_row_counts([p[1] for p in pairs], numbers)
+    point = (sum(x[0] for x in ca) / sum(x[1] for x in ca)
+             - sum(x[0] for x in cb) / sum(x[1] for x in cb)) * 100
     rnd = random.Random(seed)
     n = len(pairs)
     vals = []
     for _ in range(runs):
-        sample = [pairs[rnd.randrange(n)] for _ in range(n)]
-        vals.append(corpus_wer([p[0] for p in sample], numbers)
-                    - corpus_wer([p[1] for p in sample], numbers))
+        ea = la = eb = lb = 0
+        for _ in range(n):
+            j = rnd.randrange(n)
+            ea += ca[j][0]; la += ca[j][1]
+            eb += cb[j][0]; lb += cb[j][1]
+        vals.append((ea / la - eb / lb) * 100 if la and lb else 0.0)
     vals.sort()
-    return point, vals[int(runs * 0.025)], vals[int(runs * 0.975)], n
+    return point, _percentile(vals, 0.025), _percentile(vals, 0.975), n
 
 
 def main() -> None:
