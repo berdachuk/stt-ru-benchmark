@@ -27,6 +27,20 @@ import requests
 import soundfile as sf
 from datasets import Audio, load_dataset
 
+# Домены. Один корпус ничего не доказывает: чистая начитка, аудиокнига,
+# спонтанная лекция и бытовая команда — четыре разные задачи, и порядок движков
+# на них может отличаться. Поэтому WER считается ПО ДОМЕНАМ, без общего среднего.
+DOMAINS = {
+    # чистая студийная начитка новостных фраз
+    "fleurs": {"id": "google/fleurs", "config": "ru_ru", "split": "test", "text": "transcription"},
+    # аудиокниги: чтение, но другой стиль и длинные фразы
+    "rulibrispeech": {"id": "bond005/rulibrispeech", "config": None, "split": "test", "text": "transcription"},
+    # спонтанная речь: лекции и интервью подкаста
+    "podlodka": {"id": "bond005/podlodka_speech", "config": None, "split": "test", "text": "transcription"},
+    # бытовые команды устройствам: короткие, разговорные, шумные
+    "sova_rudevices": {"id": "bond005/sova_rudevices", "config": None, "split": "test", "text": "transcription"},
+}
+
 DATASET = "google/fleurs"
 CONFIG = "ru_ru"
 
@@ -134,15 +148,19 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--engine", required=True)
     ap.add_argument("--limit", type=int, default=150)
-    ap.add_argument("--split", default="test")
+    ap.add_argument("--domain", default="fleurs", choices=sorted(DOMAINS))
+    ap.add_argument("--split", default=None)
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
     call = pick_caller(args.engine)
-    out_path = Path(args.out or f"results/raw/{args.engine}.jsonl")
+    domain = DOMAINS[args.domain]
+    split = args.split or domain["split"]
+    out_path = Path(args.out or f"results/{args.domain}/{args.engine}.jsonl")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    stream = load_dataset(DATASET, CONFIG, split=args.split, streaming=True)
+    load_args = [domain["id"]] + ([domain["config"]] if domain["config"] else [])
+    stream = load_dataset(*load_args, split=split, streaming=True)
     stream = stream.cast_column("audio", Audio(decode=False))
 
     written = failed = 0
@@ -151,7 +169,8 @@ def main() -> None:
         # Шапка: без неё через месяц не понять, на какой версии всё считалось.
         fh.write(json.dumps({
             "_meta": {
-                "engine": args.engine, "dataset": f"{DATASET}/{CONFIG}", "split": args.split,
+                "engine": args.engine, "domain": args.domain,
+                "dataset": domain["id"], "config": domain["config"], "split": split,
                 "limit": args.limit, "started_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "endpoint": {"whisper-1": OPENAI_BASE, "whisper-podlodka-turbo": OPENAI_BASE,
                              "nova-2": DEEPGRAM_URL, "nova-3": DEEPGRAM_URL,
@@ -164,7 +183,7 @@ def main() -> None:
             if idx >= args.limit:
                 break
             wav = item["audio"]["bytes"]
-            ref = item.get("transcription") or item.get("raw_transcription") or ""
+            ref = item.get(domain["text"]) or item.get("raw_transcription") or ""
             t0 = time.time()
             try:
                 hyp = call(args.engine, wav)

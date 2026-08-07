@@ -1,0 +1,34 @@
+{
+  "gap_sec": 0.4,
+  "sample_rate": 16000,
+  "files": [
+    {
+      "file": "long_01min.wav",
+      "target_minutes": 1.0,
+      "duration_s": 46.6,
+      "utterances": 4,
+      "ref_words": 62
+    },
+    {
+      "file": "long_05min.wav",
+      "target_minutes": 5.0,
+      "duration_s": 285.3,
+      "utterances": 24,
+      "ref_words": 440
+    },
+    {
+      "file": "long_15min.wav",
+      "target_minutes": 15.0,
+      "duration_s": 898.0,
+      "utterances": 75,
+      "ref_words": 1436
+    },
+    {
+      "file": "long_30min.wav",
+      "target_minutes": 30.0,
+      "duration_s": 1794.7,
+      "utterances": 153,
+      "ref_words": 2916
+    }
+  ]
+}
