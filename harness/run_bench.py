@@ -7,6 +7,9 @@
 Движки:
   whisper-1, whisper-podlodka-turbo — OpenAI-совместимый API (переменная K)
   gigaam-v3                         — GigaAM, русская ASR (переменная RPA)
+  parakeet-tdt-0.6b-v3              — локальная модель, считается ПРЯМО ЗДЕСЬ на GPU
+                                      (нет сети → latency_s это чистый инференс,
+                                       он НЕ сравним с сетевыми движками)
   nova-2, nova-3                    — Deepgram (переменная DG)
   speechcore                        — асинхронный пайплайн upload → poll (SC)
 
@@ -54,6 +57,11 @@ OPENAI_ENGINES = ("whisper-1", "whisper-podlodka-turbo")
 RPA_BASE = os.environ.get("RPA_URL", "https://private.rpa.icu/v1")
 RPA_ENGINES = ("gigaam-v3",)
 DEEPGRAM_ENGINES = ("nova-2", "nova-3")
+# Локальные движки: модель грузится в этот же процесс, запрос никуда не уходит.
+# Держим отдельно, потому что latency у них означает другое — только инференс,
+# без сети, очереди и загрузки файла.
+LOCAL_ENGINES = ("parakeet-tdt-0.6b-v3",)
+_local_model = None
 
 
 def duration_sec(wav: bytes) -> float:
@@ -132,7 +140,41 @@ def call_speechcore(engine: str, wav: bytes) -> str:
     return text
 
 
+def call_local(engine: str, wav: bytes) -> str:
+    """Parakeet TDT — многоязычная ASR NVIDIA (25 языков, русский в их числе).
+    Язык определяет сама, подсказку не принимает: у остальных движков мы
+    честно передаём language=ru, здесь такой ручки нет — это её свойство,
+    а не поблажка."""
+    global _local_model
+    import numpy as np
+    import torch
+
+    if _local_model is None:
+        from transformers import AutoModelForTDT, AutoProcessor
+        mid = os.environ.get("LOCAL_MODEL", "nvidia/parakeet-tdt-0.6b-v3")
+        proc = AutoProcessor.from_pretrained(mid)
+        model = AutoModelForTDT.from_pretrained(mid, dtype="auto", device_map="cuda")
+        model.eval()
+        _local_model = (proc, model)
+    proc, model = _local_model
+
+    audio, sr = sf.read(io.BytesIO(wav), dtype="float32")
+    if audio.ndim > 1:                      # модель ждёт моно
+        audio = audio.mean(axis=1)
+    want = proc.feature_extractor.sampling_rate
+    if sr != want:
+        import librosa
+        audio = librosa.resample(audio, orig_sr=sr, target_sr=want)
+    inputs = proc(audio, sampling_rate=want, return_tensors="pt").to(model.device)
+    with torch.no_grad():
+        out = model.generate(**inputs, return_dict_in_generate=True)
+    text = proc.batch_decode(out.sequences, skip_special_tokens=True)[0]
+    return (text or "").strip()
+
+
 def pick_caller(engine: str):
+    if engine in LOCAL_ENGINES:
+        return call_local
     if engine in OPENAI_ENGINES:
         return call_openai
     if engine in RPA_ENGINES:
@@ -175,7 +217,7 @@ def main() -> None:
                 "endpoint": {"whisper-1": OPENAI_BASE, "whisper-podlodka-turbo": OPENAI_BASE,
                              "nova-2": DEEPGRAM_URL, "nova-3": DEEPGRAM_URL,
                              "gigaam-v3": RPA_BASE,
-                             "speechcore": SPEECHCORE_BASE}[args.engine],
+                             "speechcore": SPEECHCORE_BASE}.get(args.engine, "local-gpu"),
             }
         }, ensure_ascii=False) + "\n")
 
