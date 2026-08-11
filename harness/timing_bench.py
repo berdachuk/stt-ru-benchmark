@@ -11,6 +11,12 @@
 и расставили. Не нужны ни судьи, ни второй движок, ни выравнивание: истина
 задана построением.
 
+ОДНА ПОПРАВКА, БЕЗ КОТОРОЙ ЭТАЛОН ВРЁТ. Клип FLEURS начинается не с речи: внутри
+него есть собственная тишина, у некоторых до 2-3 секунд. Принимать начало клипа
+за начало фразы — значит записать движку промах, которого он не делал. Поэтому
+момент начала речи ищем в самом аудио по энергии (refine_onsets) и меряем от
+него. На наших данных поправка сдвигала оценку почти на 2 секунды.
+
 ЧТО СЧИТАЕМ И ПОЧЕМУ ИМЕННО ТАК.
   • Смещение ЗНАКОВОЕ. Дефект, ради которого всё затевалось, односторонний —
     время уезжает назад. Модуль спрятал бы именно это.
@@ -76,24 +82,31 @@ def segments_openai(model: str, wav: Path) -> list[dict]:
 
 
 def segments_speechcore(model: str, wav: Path) -> list[dict]:
-    """Асинхронный пайплайн: upload → poll. Токен в SC."""
+    """Асинхронный пайплайн SpeechCore: upload → опрос статуса → результат.
+
+    Это ДРУГОЙ путь, чем модель whisper-1 на хабе: свой батчевый воркер со своей
+    нарезкой. Ради него всё и затевалось. Токен в SC (кнопка «API токен» в UI).
+    """
     hdr = {"Authorization": f"Bearer {os.environ['SC']}"}
     with wav.open("rb") as fh:
-        r = requests.post(f"{SPEECHCORE_BASE}/transcribe", headers=hdr,
+        r = requests.post(f"{SPEECHCORE_BASE}/upload", headers=hdr,
                           files={"file": (wav.name, fh, "audio/wav")},
-                          data={"language": "ru", "model": "large-v3"}, timeout=600)
+                          params={"model": "large-v3", "language": "ru", "diarize": "false"},
+                          timeout=900)
     r.raise_for_status()
-    task_id = r.json().get("task_id") or r.json().get("id")
-    for _ in range(600):
+    task_id = r.json()["task_id"]
+    for _ in range(720):
         time.sleep(5)
-        p = requests.get(f"{SPEECHCORE_BASE}/tasks/{task_id}", headers=hdr, timeout=60)
-        p.raise_for_status()
-        body = p.json()
-        if body.get("status") in ("completed", "done", "success"):
-            segs = body.get("segments") or (body.get("result") or {}).get("segments") or []
-            return [{"start": s["start"], "end": s["end"], "text": s.get("text", "")} for s in segs]
-        if body.get("status") in ("failed", "error"):
-            raise RuntimeError(f"speechcore: {body}")
+        st_ = requests.get(f"{SPEECHCORE_BASE}/transcriptions/{task_id}/status",
+                           headers=hdr, timeout=60).json()
+        if st_.get("status") == "completed":
+            body = requests.get(f"{SPEECHCORE_BASE}/transcriptions/{task_id}",
+                                headers=hdr, timeout=300).json()
+            return [{"start": s["start"], "end": s["end"], "text": s.get("text", ""),
+                     "words": s.get("words") or []}
+                    for s in (body.get("segments") or [])]
+        if st_.get("status") == "failed":
+            raise RuntimeError(f"speechcore: {st_}")
     raise TimeoutError("speechcore: не дождались")
 
 
@@ -130,6 +143,40 @@ ENGINES = {
 
 
 # ── сопоставление и метрики ──
+
+
+def refine_onsets(bounds: list[dict], wav: Path) -> list[dict]:
+    """Начало РЕЧИ внутри каждой фразы, а не начало клипа.
+
+    Идём по кадрам в 10 мс, порог берём от собственного шума этой же фразы:
+    фиксированный порог не работает — записи FLEURS сильно разные по громкости.
+    """
+    import wave
+
+    import numpy as np
+
+    with wave.open(str(wav), "rb") as wf:
+        rate, n = wf.getframerate(), wf.getnframes()
+        raw = np.frombuffer(wf.readframes(n), dtype=np.int16).astype(np.float32)
+        if wf.getnchannels() > 1:
+            raw = raw.reshape(-1, wf.getnchannels()).mean(axis=1)
+    raw /= 32768.0
+    step = max(int(0.01 * rate), 1)
+
+    out = []
+    for b in bounds:
+        i0, i1 = int(b["start"] * rate), min(int(b["end"] * rate), len(raw))
+        seg = raw[i0:i1]
+        if len(seg) < step * 5:
+            out.append({**b, "speech_start": b["start"]})
+            continue
+        frames = seg[: len(seg) // step * step].reshape(-1, step)
+        rms = np.sqrt((frames ** 2).mean(axis=1))
+        floor = float(np.percentile(rms, 10))
+        thr = max(floor * 4, float(rms.max()) * 0.05)
+        hit = np.argmax(rms > thr) if (rms > thr).any() else 0
+        out.append({**b, "speech_start": round(b["start"] + hit * step / rate, 3)})
+    return out
 
 
 def word_stream(segs: list[dict]) -> tuple[list[str], list[float], str]:
@@ -191,12 +238,14 @@ def match(bounds: list[dict], segs: list[dict]) -> tuple[list[dict], str]:
 
     out = []
     for ref_i, b in first_of.items():
+        truth = b.get("speech_start", b["start"])
         hit = next((aligned[ref_i + d] for d in range(3) if ref_i + d in aligned), None)
         if hit is None:
             continue
         pred = hyp_t[hit]
-        out.append({"true_start": b["start"], "pred_start": round(pred, 3),
-                    "offset": round(pred - b["start"], 3), "text": b["text"][:60]})
+        out.append({"true_start": truth, "clip_start": b["start"],
+                    "pred_start": round(pred, 3),
+                    "offset": round(pred - truth, 3), "text": b["text"][:60]})
     return out, resolution
 
 
@@ -263,7 +312,8 @@ def main() -> None:
 
     t0 = time.time()
     segs = call(args.engine, wav)
-    pairs, resolution = match(entry["bounds"], segs)
+    bounds = refine_onsets(entry["bounds"], wav)
+    pairs, resolution = match(bounds, segs)
     res = {
         "engine": args.engine, "set": wav.parent.name + "/" + wav.stem,
         "gap_sec": entry.get("gap_sec", man.get("gap_sec")),
