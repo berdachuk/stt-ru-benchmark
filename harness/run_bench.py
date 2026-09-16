@@ -6,6 +6,8 @@
 
 Движки:
   whisper-1, whisper-podlodka-turbo — OpenAI-совместимый API (переменная K)
+  speaches                          — Avroflex Speaches (LAN .88:8002 или HUB_URL;
+                                      K опционален; model id см. SPEACHES_MODEL)
   gigaam-v3                         — GigaAM, русская ASR (переменная RPA)
   parakeet-tdt-0.6b-v3              — локальная модель, считается ПРЯМО ЗДЕСЬ на GPU
                                       (нет сети → latency_s это чистый инференс,
@@ -16,6 +18,7 @@
 Пример:
   K=sk-... python harness/run_bench.py --engine whisper-1 --limit 150
   DG=...   python harness/run_bench.py --engine nova-2 --limit 150
+  python harness/run_bench.py --engine speaches --domain podlodka --limit 20
 """
 from __future__ import annotations
 
@@ -48,10 +51,16 @@ DATASET = "google/fleurs"
 CONFIG = "ru_ru"
 
 OPENAI_BASE = os.environ.get("HUB_URL", "https://api.neuraldeep.ru/v1")
+# Avroflex Speaches на llm-server; HUB_URL перекрывает и его.
+SPEACHES_BASE = os.environ.get("HUB_URL", "http://192.168.0.88:8002/v1")
+SPEACHES_MODEL = os.environ.get(
+    "SPEACHES_MODEL", "deepdml/faster-whisper-large-v3-turbo-ct2"
+)
 SPEECHCORE_BASE = os.environ.get("SC_URL", "https://speechcore.neuraldeep.ru/api")
 DEEPGRAM_URL = "https://api.deepgram.com/v1/listen"
 
 OPENAI_ENGINES = ("whisper-1", "whisper-podlodka-turbo")
+SPEACHES_ENGINES = ("speaches",)
 # GigaAM — русская ASR SberDevices, обучена на русском целенаправленно, а не как
 # один из ста языков. Живёт на отдельном OpenAI-совместимом эндпоинте.
 RPA_BASE = os.environ.get("RPA_URL", "https://private.rpa.icu/v1")
@@ -69,12 +78,33 @@ def duration_sec(wav: bytes) -> float:
     return info.frames / info.samplerate
 
 
+def _openai_headers() -> dict[str, str]:
+    """Bearer только если K задан: LAN Speaches без auth, llm-88 — с Bearer."""
+    key = os.environ.get("K")
+    return {"Authorization": f"Bearer {key}"} if key else {}
+
+
 def call_openai(engine: str, wav: bytes) -> str:
+    if "K" not in os.environ:
+        raise SystemExit("нужна переменная окружения K (Bearer для OpenAI-совместимого API)")
     r = requests.post(
         f"{OPENAI_BASE}/audio/transcriptions",
-        headers={"Authorization": f"Bearer {os.environ['K']}"},
+        headers=_openai_headers(),
         files={"file": ("sample.wav", wav, "audio/wav")},
         data={"model": engine, "language": "ru", "response_format": "json"},
+        timeout=300,
+    )
+    r.raise_for_status()
+    return r.json().get("text") or ""
+
+
+def call_speaches(_engine: str, wav: bytes) -> str:
+    """Avroflex Speaches: alias `speaches` → длинный model id без слэша в имени файла."""
+    r = requests.post(
+        f"{SPEACHES_BASE}/audio/transcriptions",
+        headers=_openai_headers(),
+        files={"file": ("sample.wav", wav, "audio/wav")},
+        data={"model": SPEACHES_MODEL, "language": "ru", "response_format": "json"},
         timeout=300,
     )
     r.raise_for_status()
@@ -175,6 +205,8 @@ def call_local(engine: str, wav: bytes) -> str:
 def pick_caller(engine: str):
     if engine in LOCAL_ENGINES:
         return call_local
+    if engine in SPEACHES_ENGINES:
+        return call_speaches
     if engine in OPENAI_ENGINES:
         return call_openai
     if engine in RPA_ENGINES:
@@ -184,6 +216,19 @@ def pick_caller(engine: str):
     if engine == "speechcore":
         return call_speechcore
     raise SystemExit(f"неизвестный движок: {engine}")
+
+
+def endpoint_for(engine: str) -> str:
+    if engine in SPEACHES_ENGINES:
+        return SPEACHES_BASE
+    return {
+        "whisper-1": OPENAI_BASE,
+        "whisper-podlodka-turbo": OPENAI_BASE,
+        "nova-2": DEEPGRAM_URL,
+        "nova-3": DEEPGRAM_URL,
+        "gigaam-v3": RPA_BASE,
+        "speechcore": SPEECHCORE_BASE,
+    }.get(engine, "local-gpu")
 
 
 def main() -> None:
@@ -209,17 +254,15 @@ def main() -> None:
     started = time.time()
     with out_path.open("w", encoding="utf-8") as fh:
         # Шапка: без неё через месяц не понять, на какой версии всё считалось.
-        fh.write(json.dumps({
-            "_meta": {
-                "engine": args.engine, "domain": args.domain,
-                "dataset": domain["id"], "config": domain["config"], "split": split,
-                "limit": args.limit, "started_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "endpoint": {"whisper-1": OPENAI_BASE, "whisper-podlodka-turbo": OPENAI_BASE,
-                             "nova-2": DEEPGRAM_URL, "nova-3": DEEPGRAM_URL,
-                             "gigaam-v3": RPA_BASE,
-                             "speechcore": SPEECHCORE_BASE}.get(args.engine, "local-gpu"),
-            }
-        }, ensure_ascii=False) + "\n")
+        meta = {
+            "engine": args.engine, "domain": args.domain,
+            "dataset": domain["id"], "config": domain["config"], "split": split,
+            "limit": args.limit, "started_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "endpoint": endpoint_for(args.engine),
+        }
+        if args.engine in SPEACHES_ENGINES:
+            meta["model"] = SPEACHES_MODEL
+        fh.write(json.dumps({"_meta": meta}, ensure_ascii=False) + "\n")
 
         for idx, item in enumerate(stream):
             if idx >= args.limit:

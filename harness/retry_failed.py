@@ -20,7 +20,7 @@ from pathlib import Path
 
 from datasets import Audio, load_dataset
 
-from run_bench import CONFIG, DATASET, pick_caller
+from run_bench import DOMAINS, pick_caller
 
 
 def main() -> None:
@@ -31,12 +31,14 @@ def main() -> None:
     args = ap.parse_args()
 
     paths = sorted({p for pattern in args.files for p in glob.glob(pattern)})
-    audio_cache: dict[int, bytes] = {}
+    audio_cache: dict[tuple[str, int], bytes] = {}
 
     for path in paths:
         lines = [json.loads(x) for x in Path(path).read_text(encoding="utf-8").splitlines() if x.strip()]
         meta = next((x["_meta"] for x in lines if "_meta" in x), {})
         engine = meta.get("engine") or Path(path).stem
+        domain_key = meta.get("domain") or "fleurs"
+        domain = DOMAINS.get(domain_key, DOMAINS["fleurs"])
         broken = [x for x in lines if not x.get("_meta") and x.get("error")]
         if not broken:
             print(f"{engine:<24} ошибок нет")
@@ -44,12 +46,15 @@ def main() -> None:
 
         print(f"{engine:<24} ошибок {len(broken)}: {[x['idx'] for x in broken]}", flush=True)
         need = {x["idx"] for x in broken}
-        if not need <= audio_cache.keys():
-            stream = load_dataset(DATASET, CONFIG, split=meta.get("split", "test"), streaming=True)
+        cache_keys = {(domain_key, i) for i in need}
+        if not cache_keys <= audio_cache.keys():
+            load_args = [domain["id"]] + ([domain["config"]] if domain["config"] else [])
+            split = meta.get("split") or domain["split"]
+            stream = load_dataset(*load_args, split=split, streaming=True)
             stream = stream.cast_column("audio", Audio(decode=False))
             for idx, item in enumerate(stream):
                 if idx in need:
-                    audio_cache[idx] = item["audio"]["bytes"]
+                    audio_cache[(domain_key, idx)] = item["audio"]["bytes"]
                 if idx > max(need):
                     break
 
@@ -59,7 +64,7 @@ def main() -> None:
             for attempt in range(1, args.attempts + 1):
                 t0 = time.time()
                 try:
-                    row["hyp_raw"] = call(engine, audio_cache[row["idx"]])
+                    row["hyp_raw"] = call(engine, audio_cache[(domain_key, row["idx"])])
                     row["latency_s"] = round(time.time() - t0, 3)
                     row["error"] = None
                     row["retried"] = True
