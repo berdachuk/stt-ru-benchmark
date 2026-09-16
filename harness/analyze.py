@@ -56,7 +56,10 @@ def load(path: str) -> tuple[dict, list[dict]]:
     for line in Path(path).read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
-        obj = json.loads(line)
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
         if "_meta" in obj:
             meta = obj["_meta"]
         elif not obj.get("error"):
@@ -121,6 +124,32 @@ def bootstrap_ci(rows: list[dict], numbers: bool, runs: int = 1000, seed: int = 
     return _percentile(vals, 0.025), _percentile(vals, 0.975)
 
 
+def speed_stats(rows: list[dict]) -> dict:
+    """Скорость по полям duration_s / latency_s из JSONL.
+
+    RTF = wall / audio (<1 быстрее реального времени).
+    xRT = audio / wall (сколько секунд аудио за 1 с wall).
+    """
+    audio = sum(float(r.get("duration_s") or 0.0) for r in rows)
+    wall = sum(float(r.get("latency_s") or 0.0) for r in rows)
+    lats = sorted(float(r["latency_s"]) for r in rows if r.get("latency_s") is not None)
+    rtfs = sorted(
+        float(r["latency_s"]) / float(r["duration_s"])
+        for r in rows
+        if r.get("latency_s") is not None and float(r.get("duration_s") or 0) > 0
+    )
+    med = lats[len(lats) // 2] if lats else float("nan")
+    med_rtf = rtfs[len(rtfs) // 2] if rtfs else float("nan")
+    return {
+        "audio_s": round(audio, 1),
+        "wall_s": round(wall, 1),
+        "rtf": round(wall / audio, 3) if audio else float("nan"),
+        "xrt": round(audio / wall, 2) if wall else float("nan"),
+        "latency_median_s": round(med, 3) if lats else float("nan"),
+        "rtf_median": round(med_rtf, 3) if rtfs else float("nan"),
+    }
+
+
 def paired_delta_ci(a: list[dict], b: list[dict], numbers: bool,
                     runs: int = 1000, seed: int = 0):
     """Разница WER(a) − WER(b) на общих высказываниях, с 95%-м интервалом."""
@@ -166,17 +195,27 @@ def main() -> None:
     for engine, rows in sorted(data.items(), key=lambda kv: corpus_wer(kv[1], False)):
         wer = corpus_wer(rows, False)
         lo, hi = bootstrap_ci(rows, False, args.runs)
+        spd = speed_stats(rows)
         entry = {
             "wer": round(wer, 2), "ci95": [round(lo, 2), round(hi, 2)],
             "cer": round(corpus_cer(rows, False), 2),
             "wer_numbers": round(corpus_wer(rows, True), 2),
             "cer_numbers": round(corpus_cer(rows, True), 2),
             "n": len(rows),
-            "latency_median_s": round(sorted(r["latency_s"] for r in rows)[len(rows) // 2], 2),
+            **spd,
         }
         summary[engine] = entry
         print(f"{engine:<26} {entry['wer']:>6.2f}% [{lo:>5.2f}; {hi:>5.2f}] {entry['cer']:>6.2f}% |"
               f" {entry['wer_numbers']:>9.2f}% {entry['cer_numbers']:>9.2f}%  {len(rows):>4}")
+
+    print("\nСкорость (сумма duration_s аудио / сумма latency_s wall; RTF=wall/audio, ×RT=audio/wall):")
+    print(f"{'движок':<26} {'аудио':>8} {'wall':>8} {'RTF':>7} {'×RT':>7} {'med lat':>8} {'med RTF':>8}   n")
+    print("-" * 96)
+    for engine, rows in sorted(data.items(), key=lambda kv: speed_stats(kv[1])["rtf"]):
+        s = speed_stats(rows)
+        print(f"{engine:<26} {s['audio_s']:>7.1f}s {s['wall_s']:>7.1f}s "
+              f"{s['rtf']:>6.3f} {s['xrt']:>6.2f}x "
+              f"{s['latency_median_s']:>7.2f}s {s['rtf_median']:>7.3f}  {len(rows):>4}")
 
     names = list(data)
     if len(names) > 1:

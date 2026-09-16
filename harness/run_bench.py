@@ -9,6 +9,9 @@
   speaches                          — Avroflex Speaches (LAN .88:8002 или HUB_URL;
                                       K опционален; model id см. SPEACHES_MODEL)
   gigaam-local                      — Avroflex GigaAM v3 (LAN .88:8003 или GIGAAM_URL)
+  gemma4-e2b, gemma4-e4b, gemma4-12b — Avroflex Gemma 4 ASR (LAN .88:8004 или GEMMA_URL;
+                                      сервер должен быть переключён на ту же модель)
+  qwen2-audio-7b                    — Avroflex Qwen2-Audio (LAN .88:8005 или QWEN_AUDIO_URL)
   gigaam-v3                         — GigaAM через партнёрский API (переменная RPA)
   parakeet-tdt-0.6b-v3              — локальная модель, считается ПРЯМО ЗДЕСЬ на GPU
                                       (нет сети → latency_s это чистый инференс,
@@ -21,6 +24,7 @@
   DG=...   python harness/run_bench.py --engine nova-2 --limit 150
   python harness/run_bench.py --engine speaches --domain podlodka --limit 20
   python harness/run_bench.py --engine gigaam-local --domain fleurs --limit 50
+  python harness/run_bench.py --engine gemma4-e2b --domain podlodka --limit 20
 """
 from __future__ import annotations
 
@@ -61,12 +65,19 @@ SPEACHES_MODEL = os.environ.get(
 # Avroflex GigaAM на том же GPU1; отдельный URL, чтобы не путать с HUB_URL/Speaches.
 GIGAAM_LOCAL_BASE = os.environ.get("GIGAAM_URL", "http://192.168.0.88:8003/v1")
 GIGAAM_LOCAL_MODEL = os.environ.get("GIGAAM_MODEL", "gigaam-v3")
+# Gemma 4 multimodal ASR (один контейнер :8004, модель переключается в compose).
+GEMMA_BASE = os.environ.get("GEMMA_URL", "http://192.168.0.88:8004/v1")
+# Qwen2-Audio ASR (:8005).
+QWEN_AUDIO_BASE = os.environ.get("QWEN_AUDIO_URL", "http://192.168.0.88:8005/v1")
+QWEN_AUDIO_MODEL = os.environ.get("QWEN_AUDIO_MODEL", "qwen2-audio-7b")
 SPEECHCORE_BASE = os.environ.get("SC_URL", "https://speechcore.neuraldeep.ru/api")
 DEEPGRAM_URL = "https://api.deepgram.com/v1/listen"
 
 OPENAI_ENGINES = ("whisper-1", "whisper-podlodka-turbo")
 SPEACHES_ENGINES = ("speaches",)
 GIGAAM_LOCAL_ENGINES = ("gigaam-local",)
+GEMMA_ENGINES = ("gemma4-e2b", "gemma4-e4b", "gemma4-12b")
+QWEN_AUDIO_ENGINES = ("qwen2-audio-7b",)
 # GigaAM — русская ASR SberDevices, обучена на русском целенаправленно, а не как
 # один из ста языков. Живёт на отдельном OpenAI-совместимом эндпоинте.
 RPA_BASE = os.environ.get("RPA_URL", "https://private.rpa.icu/v1")
@@ -125,6 +136,32 @@ def call_gigaam_local(_engine: str, wav: bytes) -> str:
         files={"file": ("sample.wav", wav, "audio/wav")},
         data={"model": GIGAAM_LOCAL_MODEL, "language": "ru", "response_format": "json"},
         timeout=300,
+    )
+    r.raise_for_status()
+    return r.json().get("text") or ""
+
+
+def call_gemma(engine: str, wav: bytes) -> str:
+    """Avroflex Gemma 4 ASR на .88:8004; model id = alias движка."""
+    r = requests.post(
+        f"{GEMMA_BASE}/audio/transcriptions",
+        headers=_openai_headers(),
+        files={"file": ("sample.wav", wav, "audio/wav")},
+        data={"model": engine, "language": "ru", "response_format": "json"},
+        timeout=600,
+    )
+    r.raise_for_status()
+    return r.json().get("text") or ""
+
+
+def call_qwen_audio(_engine: str, wav: bytes) -> str:
+    """Avroflex Qwen2-Audio на .88:8005."""
+    r = requests.post(
+        f"{QWEN_AUDIO_BASE}/audio/transcriptions",
+        headers=_openai_headers(),
+        files={"file": ("sample.wav", wav, "audio/wav")},
+        data={"model": QWEN_AUDIO_MODEL, "language": "ru", "response_format": "json"},
+        timeout=600,
     )
     r.raise_for_status()
     return r.json().get("text") or ""
@@ -228,6 +265,10 @@ def pick_caller(engine: str):
         return call_speaches
     if engine in GIGAAM_LOCAL_ENGINES:
         return call_gigaam_local
+    if engine in GEMMA_ENGINES:
+        return call_gemma
+    if engine in QWEN_AUDIO_ENGINES:
+        return call_qwen_audio
     if engine in OPENAI_ENGINES:
         return call_openai
     if engine in RPA_ENGINES:
@@ -244,6 +285,10 @@ def endpoint_for(engine: str) -> str:
         return SPEACHES_BASE
     if engine in GIGAAM_LOCAL_ENGINES:
         return GIGAAM_LOCAL_BASE
+    if engine in GEMMA_ENGINES:
+        return GEMMA_BASE
+    if engine in QWEN_AUDIO_ENGINES:
+        return QWEN_AUDIO_BASE
     return {
         "whisper-1": OPENAI_BASE,
         "whisper-podlodka-turbo": OPENAI_BASE,
@@ -287,6 +332,10 @@ def main() -> None:
             meta["model"] = SPEACHES_MODEL
         if args.engine in GIGAAM_LOCAL_ENGINES:
             meta["model"] = GIGAAM_LOCAL_MODEL
+        if args.engine in GEMMA_ENGINES:
+            meta["model"] = args.engine
+        if args.engine in QWEN_AUDIO_ENGINES:
+            meta["model"] = QWEN_AUDIO_MODEL
         fh.write(json.dumps({"_meta": meta}, ensure_ascii=False) + "\n")
 
         for idx, item in enumerate(stream):
