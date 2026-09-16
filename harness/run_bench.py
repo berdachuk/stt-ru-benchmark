@@ -8,7 +8,8 @@
   whisper-1, whisper-podlodka-turbo — OpenAI-совместимый API (переменная K)
   speaches                          — Avroflex Speaches (LAN .88:8002 или HUB_URL;
                                       K опционален; model id см. SPEACHES_MODEL)
-  gigaam-v3                         — GigaAM, русская ASR (переменная RPA)
+  gigaam-local                      — Avroflex GigaAM v3 (LAN .88:8003 или GIGAAM_URL)
+  gigaam-v3                         — GigaAM через партнёрский API (переменная RPA)
   parakeet-tdt-0.6b-v3              — локальная модель, считается ПРЯМО ЗДЕСЬ на GPU
                                       (нет сети → latency_s это чистый инференс,
                                        он НЕ сравним с сетевыми движками)
@@ -19,6 +20,7 @@
   K=sk-... python harness/run_bench.py --engine whisper-1 --limit 150
   DG=...   python harness/run_bench.py --engine nova-2 --limit 150
   python harness/run_bench.py --engine speaches --domain podlodka --limit 20
+  python harness/run_bench.py --engine gigaam-local --domain fleurs --limit 50
 """
 from __future__ import annotations
 
@@ -56,11 +58,15 @@ SPEACHES_BASE = os.environ.get("HUB_URL", "http://192.168.0.88:8002/v1")
 SPEACHES_MODEL = os.environ.get(
     "SPEACHES_MODEL", "deepdml/faster-whisper-large-v3-turbo-ct2"
 )
+# Avroflex GigaAM на том же GPU1; отдельный URL, чтобы не путать с HUB_URL/Speaches.
+GIGAAM_LOCAL_BASE = os.environ.get("GIGAAM_URL", "http://192.168.0.88:8003/v1")
+GIGAAM_LOCAL_MODEL = os.environ.get("GIGAAM_MODEL", "gigaam-v3")
 SPEECHCORE_BASE = os.environ.get("SC_URL", "https://speechcore.neuraldeep.ru/api")
 DEEPGRAM_URL = "https://api.deepgram.com/v1/listen"
 
 OPENAI_ENGINES = ("whisper-1", "whisper-podlodka-turbo")
 SPEACHES_ENGINES = ("speaches",)
+GIGAAM_LOCAL_ENGINES = ("gigaam-local",)
 # GigaAM — русская ASR SberDevices, обучена на русском целенаправленно, а не как
 # один из ста языков. Живёт на отдельном OpenAI-совместимом эндпоинте.
 RPA_BASE = os.environ.get("RPA_URL", "https://private.rpa.icu/v1")
@@ -105,6 +111,19 @@ def call_speaches(_engine: str, wav: bytes) -> str:
         headers=_openai_headers(),
         files={"file": ("sample.wav", wav, "audio/wav")},
         data={"model": SPEACHES_MODEL, "language": "ru", "response_format": "json"},
+        timeout=300,
+    )
+    r.raise_for_status()
+    return r.json().get("text") or ""
+
+
+def call_gigaam_local(_engine: str, wav: bytes) -> str:
+    """Avroflex GigaAM v3 на .88:8003 (тот же 5060 Ti, что Speaches)."""
+    r = requests.post(
+        f"{GIGAAM_LOCAL_BASE}/audio/transcriptions",
+        headers=_openai_headers(),
+        files={"file": ("sample.wav", wav, "audio/wav")},
+        data={"model": GIGAAM_LOCAL_MODEL, "language": "ru", "response_format": "json"},
         timeout=300,
     )
     r.raise_for_status()
@@ -207,6 +226,8 @@ def pick_caller(engine: str):
         return call_local
     if engine in SPEACHES_ENGINES:
         return call_speaches
+    if engine in GIGAAM_LOCAL_ENGINES:
+        return call_gigaam_local
     if engine in OPENAI_ENGINES:
         return call_openai
     if engine in RPA_ENGINES:
@@ -221,6 +242,8 @@ def pick_caller(engine: str):
 def endpoint_for(engine: str) -> str:
     if engine in SPEACHES_ENGINES:
         return SPEACHES_BASE
+    if engine in GIGAAM_LOCAL_ENGINES:
+        return GIGAAM_LOCAL_BASE
     return {
         "whisper-1": OPENAI_BASE,
         "whisper-podlodka-turbo": OPENAI_BASE,
@@ -262,6 +285,8 @@ def main() -> None:
         }
         if args.engine in SPEACHES_ENGINES:
             meta["model"] = SPEACHES_MODEL
+        if args.engine in GIGAAM_LOCAL_ENGINES:
+            meta["model"] = GIGAAM_LOCAL_MODEL
         fh.write(json.dumps({"_meta": meta}, ensure_ascii=False) + "\n")
 
         for idx, item in enumerate(stream):
