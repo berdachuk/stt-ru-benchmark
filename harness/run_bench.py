@@ -9,8 +9,10 @@
   speaches                          — Avroflex Speaches (LAN .88:8002 или HUB_URL;
                                       K опционален; model id см. SPEACHES_MODEL)
   gigaam-local                      — Avroflex GigaAM v3 (LAN .88:8003 или GIGAAM_URL)
-  gemma4-e2b, gemma4-e4b, gemma4-12b — Avroflex Gemma 4 ASR (LAN .88:8004 или GEMMA_URL;
+  gemma4-e2b, gemma4-e4b, gemma4-e4b-8bit, gemma4-e4b-4bit, gemma4-e4b-qat, gemma4-12b
+                                      — Avroflex Gemma 4 ASR (LAN .88:8004 или GEMMA_URL;
                                       сервер должен быть переключён на ту же модель)
+  gemma4-12b-qat                    — Ollama Gemma 4 12B QAT Q4_0 (LAN .88:11434 или OLLAMA_URL)
   qwen2-audio-7b                    — Avroflex Qwen2-Audio (LAN .88:8005 или QWEN_AUDIO_URL)
   gigaam-v3                         — GigaAM через партнёрский API (переменная RPA)
   parakeet-tdt-0.6b-v3              — локальная модель, считается ПРЯМО ЗДЕСЬ на GPU
@@ -67,6 +69,9 @@ GIGAAM_LOCAL_BASE = os.environ.get("GIGAAM_URL", "http://192.168.0.88:8003/v1")
 GIGAAM_LOCAL_MODEL = os.environ.get("GIGAAM_MODEL", "gigaam-v3")
 # Gemma 4 multimodal ASR (один контейнер :8004, модель переключается в compose).
 GEMMA_BASE = os.environ.get("GEMMA_URL", "http://192.168.0.88:8004/v1")
+# Ollama Gemma 4 12B QAT Q4_0 (HF google/...-qat-q4_0-gguf via ollama tag).
+OLLAMA_BASE = os.environ.get("OLLAMA_URL", "http://192.168.0.88:11434/v1")
+OLLAMA_GEMMA12_QAT_MODEL = os.environ.get("OLLAMA_GEMMA12_QAT_MODEL", "gemma4:12b-it-qat")
 # Qwen2-Audio ASR (:8005).
 QWEN_AUDIO_BASE = os.environ.get("QWEN_AUDIO_URL", "http://192.168.0.88:8005/v1")
 QWEN_AUDIO_MODEL = os.environ.get("QWEN_AUDIO_MODEL", "qwen2-audio-7b")
@@ -76,7 +81,15 @@ DEEPGRAM_URL = "https://api.deepgram.com/v1/listen"
 OPENAI_ENGINES = ("whisper-1", "whisper-podlodka-turbo")
 SPEACHES_ENGINES = ("speaches",)
 GIGAAM_LOCAL_ENGINES = ("gigaam-local",)
-GEMMA_ENGINES = ("gemma4-e2b", "gemma4-e4b", "gemma4-12b")
+GEMMA_ENGINES = (
+    "gemma4-e2b",
+    "gemma4-e4b",
+    "gemma4-e4b-8bit",
+    "gemma4-e4b-4bit",
+    "gemma4-e4b-qat",
+    "gemma4-12b",
+)
+OLLAMA_ENGINES = ("gemma4-12b-qat",)
 QWEN_AUDIO_ENGINES = ("qwen2-audio-7b",)
 # GigaAM — русская ASR SberDevices, обучена на русском целенаправленно, а не как
 # один из ста языков. Живёт на отдельном OpenAI-совместимом эндпоинте.
@@ -152,6 +165,47 @@ def call_gemma(engine: str, wav: bytes) -> str:
     )
     r.raise_for_status()
     return r.json().get("text") or ""
+
+
+def call_ollama_gemma12_qat(_engine: str, wav: bytes) -> str:
+    """Ollama gemma4:12b-it-qat via /v1/chat/completions + input_audio (no thinking)."""
+    import base64
+
+    b64 = base64.b64encode(wav).decode("ascii")
+    prompt = (
+        "Transcribe the following speech segment in Russian into Russian text. "
+        "Only output the transcription, with no newlines. "
+        "When transcribing numbers, write the digits."
+    )
+    r = requests.post(
+        f"{OLLAMA_BASE}/chat/completions",
+        headers={**_openai_headers(), "Content-Type": "application/json"},
+        json={
+            "model": OLLAMA_GEMMA12_QAT_MODEL,
+            "temperature": 0,
+            "max_tokens": 512,
+            "reasoning_effort": "none",
+            "options": {"num_ctx": 8192, "num_predict": 512},
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "input_audio",
+                            "input_audio": {"data": b64, "format": "wav"},
+                        },
+                    ],
+                }
+            ],
+        },
+        timeout=600,
+    )
+    r.raise_for_status()
+    body = r.json()
+    msg = (body.get("choices") or [{}])[0].get("message") or {}
+    text = msg.get("content") or ""
+    return " ".join(str(text).split()).strip()
 
 
 def call_qwen_audio(_engine: str, wav: bytes) -> str:
@@ -267,6 +321,8 @@ def pick_caller(engine: str):
         return call_gigaam_local
     if engine in GEMMA_ENGINES:
         return call_gemma
+    if engine in OLLAMA_ENGINES:
+        return call_ollama_gemma12_qat
     if engine in QWEN_AUDIO_ENGINES:
         return call_qwen_audio
     if engine in OPENAI_ENGINES:
@@ -287,6 +343,8 @@ def endpoint_for(engine: str) -> str:
         return GIGAAM_LOCAL_BASE
     if engine in GEMMA_ENGINES:
         return GEMMA_BASE
+    if engine in OLLAMA_ENGINES:
+        return OLLAMA_BASE
     if engine in QWEN_AUDIO_ENGINES:
         return QWEN_AUDIO_BASE
     return {
@@ -334,6 +392,8 @@ def main() -> None:
             meta["model"] = GIGAAM_LOCAL_MODEL
         if args.engine in GEMMA_ENGINES:
             meta["model"] = args.engine
+        if args.engine in OLLAMA_ENGINES:
+            meta["model"] = OLLAMA_GEMMA12_QAT_MODEL
         if args.engine in QWEN_AUDIO_ENGINES:
             meta["model"] = QWEN_AUDIO_MODEL
         fh.write(json.dumps({"_meta": meta}, ensure_ascii=False) + "\n")
