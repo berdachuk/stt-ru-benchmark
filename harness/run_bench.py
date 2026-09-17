@@ -14,6 +14,7 @@
                                       сервер должен быть переключён на ту же модель)
   gemma4-12b-qat                    — Ollama Gemma 4 12B QAT Q4_0 (LAN .88:11434 или OLLAMA_URL)
   qwen2-audio-7b                    — Avroflex Qwen2-Audio (LAN .88:8005 или QWEN_AUDIO_URL)
+  qwen25-omni-7b                    — Avroflex Qwen2.5-Omni GPTQ/AWQ/bnb4 (LAN .88:8007 или QWEN_OMNI_URL)
   gigaam-v3                         — GigaAM через партнёрский API (переменная RPA)
   parakeet-tdt-0.6b-v3              — локальная модель, считается ПРЯМО ЗДЕСЬ на GPU
                                       (нет сети → latency_s это чистый инференс,
@@ -75,6 +76,9 @@ OLLAMA_GEMMA12_QAT_MODEL = os.environ.get("OLLAMA_GEMMA12_QAT_MODEL", "gemma4:12
 # Qwen2-Audio ASR (:8005).
 QWEN_AUDIO_BASE = os.environ.get("QWEN_AUDIO_URL", "http://192.168.0.88:8005/v1")
 QWEN_AUDIO_MODEL = os.environ.get("QWEN_AUDIO_MODEL", "qwen2-audio-7b")
+# Qwen2.5-Omni ASR (:8007) — GPTQ-Int4 / AWQ / bnb4 fallback.
+QWEN_OMNI_BASE = os.environ.get("QWEN_OMNI_URL", "http://192.168.0.88:8007/v1")
+QWEN_OMNI_MODEL = os.environ.get("QWEN_OMNI_MODEL", "qwen25-omni-7b")
 SPEECHCORE_BASE = os.environ.get("SC_URL", "https://speechcore.neuraldeep.ru/api")
 DEEPGRAM_URL = "https://api.deepgram.com/v1/listen"
 
@@ -91,6 +95,7 @@ GEMMA_ENGINES = (
 )
 OLLAMA_ENGINES = ("gemma4-12b-qat",)
 QWEN_AUDIO_ENGINES = ("qwen2-audio-7b",)
+QWEN_OMNI_ENGINES = ("qwen25-omni-7b",)
 # GigaAM — русская ASR SberDevices, обучена на русском целенаправленно, а не как
 # один из ста языков. Живёт на отдельном OpenAI-совместимом эндпоинте.
 RPA_BASE = os.environ.get("RPA_URL", "https://private.rpa.icu/v1")
@@ -221,6 +226,19 @@ def call_qwen_audio(_engine: str, wav: bytes) -> str:
     return r.json().get("text") or ""
 
 
+def call_qwen_omni(_engine: str, wav: bytes) -> str:
+    """Avroflex Qwen2.5-Omni на .88:8007."""
+    r = requests.post(
+        f"{QWEN_OMNI_BASE}/audio/transcriptions",
+        headers=_openai_headers(),
+        files={"file": ("sample.wav", wav, "audio/wav")},
+        data={"model": QWEN_OMNI_MODEL, "language": "ru", "response_format": "json"},
+        timeout=900,
+    )
+    r.raise_for_status()
+    return r.json().get("text") or ""
+
+
 def call_rpa(engine: str, wav: bytes) -> str:
     r = requests.post(
         f"{RPA_BASE}/audio/transcriptions",
@@ -325,6 +343,8 @@ def pick_caller(engine: str):
         return call_ollama_gemma12_qat
     if engine in QWEN_AUDIO_ENGINES:
         return call_qwen_audio
+    if engine in QWEN_OMNI_ENGINES:
+        return call_qwen_omni
     if engine in OPENAI_ENGINES:
         return call_openai
     if engine in RPA_ENGINES:
@@ -347,6 +367,8 @@ def endpoint_for(engine: str) -> str:
         return OLLAMA_BASE
     if engine in QWEN_AUDIO_ENGINES:
         return QWEN_AUDIO_BASE
+    if engine in QWEN_OMNI_ENGINES:
+        return QWEN_OMNI_BASE
     return {
         "whisper-1": OPENAI_BASE,
         "whisper-podlodka-turbo": OPENAI_BASE,
@@ -396,6 +418,8 @@ def main() -> None:
             meta["model"] = OLLAMA_GEMMA12_QAT_MODEL
         if args.engine in QWEN_AUDIO_ENGINES:
             meta["model"] = QWEN_AUDIO_MODEL
+        if args.engine in QWEN_OMNI_ENGINES:
+            meta["model"] = QWEN_OMNI_MODEL
         fh.write(json.dumps({"_meta": meta}, ensure_ascii=False) + "\n")
 
         for idx, item in enumerate(stream):
